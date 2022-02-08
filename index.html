@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="ie=edge">
+    <title>Statki</title>
+    <link rel="stylesheet" href="reset.css">
+    <script>
+        window.onload = function () { // Definiowanie w onload blokuje konsole
+            const boardSize = 10; // Rozmiaru planszy (Zostawić na 10!)
+            var boardPlayer = []; // Dane o statkach gracza
+            var boardEnemy = []; // Dane o statkach gracza
+            var shipsToPlace = []; // Statki jakie można rozstawić na planszy
+            var shipsToPlaceNoMod = [];
+            var wrkX; // POMOC - pozycja x współdzielona przez niepowiązane funkcje
+            var wrkY; // POMOC - pozycja y współdzielona przez niepowiązane funkcje
+            var DBG_clickCount = 0; // Liczba kliknięć w przełącznik debugu
+            var DBG_timeout = null; // Timeout do resetu DBG_clickCount
+            var btnDBG = null; // HTML - przycisk włączania menu debugu
+            var DBG_menuVisible; // widoczność menu debugu
+            var revealed = false; // Pokazywanie pozycji przeciwnika
+            var selectedShip; // Aktualnie wybrany statek
+            var selShipOrient; // Orientacja wybranego statku (0 lub 1)
+            var gameStarted; // Faza gry rozpoczęta
+            var canStart = false; // Można rozpocząć fazę gry
+            var btnStart; // HTML - przycisk rozpoczynania fazy gry
+            var btnSettings;
+            var statusBox; // HTML - obiekt wyświetlający aktualną fazę
+            var botToShoot = []; // Następne cele bota (zaawansowane zachowanie)
+            var shipsFound = []; // [MOD]
+            var shipsDestroyed = [];
+            var shipsToDestroy = [];
+            var possibleTargets = [];
+            var menuSettingsVisible;
+            var playerTurn;
+            var DBG_placementFailures = 0;
+            var btnContainer;
+
+            var simColor = "rgb(64, 192, 64)"; // Kolor projekcji statku w simShip
+            var selColor = "rgb(32, 32, 192)"; // Kolor statku wybranego/rozstawionego
+            var lckColor = "rgb(192, 64, 64)"; // Kolor projekcji statku w simShip, gdy pozycja jest zablokowana
+            var defColor = "rgb(224, 224, 224)"; // Kolor domyślny komórek
+            var hitColor = "rgb(192, 64, 192)"; // Kolor trafionego statku
+            var misColor = "rgb(64, 192, 192)"; // Kolor pudła
+            var msEnabled = true;
+            var asEnabled = true;
+            var customShipSet = [];
+            var enemyThinkTime = 1000;
+            var turnAlert = true;
+            var doReload = true;
+
+            main();
+
+            function getRandomInt(min, max) { // Losuje całkowitą z zakresu <credit: MDN>
+                return Math.floor(Math.random() * (max - min + 1)) + min;
+            }
+
+            function sortFunction(a, b) { // Pomocnicza funkcja sortująca
+                return a.x - b.x;
+            }
+
+            function sortFunctionAlt(a, b) { // Pomocnicza funkcja sortująca
+                return a.y - b.y;
+            }
+
+            function main() { // Inicjalizacja całego skryptu
+                if (customShipSet.length == 0) shipsToPlace = [4, 3, 3, 2, 2, 2, 1, 1, 1, 1];
+                else shipsToPlace = customShipSet;
+                shipsToPlaceNoMod = shipsToPlace.slice(); // W celu zrobienia kopii, a nie referencji...
+                shipsToDestroy = shipsToPlaceNoMod.slice();
+                menuSettingsVisible = false;
+                DBG_menuVisible = false;
+                revealed = false;
+                selShipOrient = 0;
+                gameStarted = false;
+                playerTurn = true;
+                drawToPlace();
+                selectedShip = null;
+                btnContainer = document.getElementById("buttonContainer");
+                setupButtons();
+                btnStart = document.getElementById("btnStartGame");
+                statusBox = document.getElementById("statusBox");
+                btnDBG = document.getElementById("btnDBGshowMenu");
+                btnSettings = document.getElementById("btnSettings");
+                btnReload = document.getElementById("btnReload");
+                btnReload.style.animation = "";
+                btnSettings.removeAttribute("disabled");
+                canStart = checkStart();
+                placeRandom(boardEnemy);
+                buildBoard(boardPlayer);
+                setPossibleTargets();
+                setStatus(0);
+                selectShip(document.getElementById("shipDisplayContainer").firstChild);
+            }
+
+            function buildBoard(board) { // Tworzy tablicę przechowującą dane planszy (do czyszczenia)
+                for (var i = 0; i < boardSize + 2; i++) {
+                    board[i] = [];
+                    for (var j = 0; j < boardSize + 2; j++) {
+                        if (i == 0 || j == 0 || i == boardSize + 1 || j == boardSize + 1) board[i][j] = 9;
+                        else board[i][j] = 0;
+                    }
+                }
+                drawBoard(board);
+            }
+
+            function drawBoard(board) { // Tworzy planszę gry [używać tylko przy zmianie listenerów!]
+                if (board == boardEnemy) {
+                    var container = document.getElementById("boardEnemy");
+                    container.innerHTML = "Enemy";
+                } else {
+                    var container = document.getElementById("boardPlayer");
+                    container.innerHTML = "Player";
+                }
+                for (var i = 1; i <= boardSize; i++) {
+                    for (var j = 1; j <= boardSize; j++) {
+                        var cell = document.createElement("DIV");
+                        if (!gameStarted) {
+                            if (board == boardEnemy) {
+                                container.appendChild(cell);
+                                cell.addEventListener("click", function (event) {
+                                    window.alert("Place your ships or start your game first!");
+                                });
+                            } else {
+                                container.appendChild(cell);
+                                cell.addEventListener("mouseover", function (event) {
+                                    var getX = (this.style.left.slice(0, -2) - 20) / 40 + 1;
+                                    var getY = (this.style.top.slice(0, -2) - 90) / 40 + 1;
+                                    var targ = event.target;
+                                    recolourBoard(boardPlayer);
+                                    if (selectedShip != null) {
+                                        simShip(boardPlayer, getX, getY, selShipOrient, selectedShip.children
+                                            .length,
+                                            targ);
+                                    }
+                                });
+                                cell.addEventListener("mouseout", function (event) {
+                                    recolourBoard(boardPlayer);
+                                });
+                                cell.addEventListener("contextmenu", function (event) {
+                                    event.preventDefault();
+                                    switchShipOrient();
+                                    var getX = (this.style.left.slice(0, -2) - 20) / 40 + 1;
+                                    var getY = (this.style.top.slice(0, -2) - 90) / 40 + 1;
+                                    var targ = event.target;
+                                    recolourBoard(boardPlayer);
+                                    if (selectedShip != null) {
+                                        simShip(boardPlayer, getX, getY, selShipOrient, selectedShip.children
+                                            .length,
+                                            targ);
+                                    }
+                                    return false;
+                                });
+                                cell.addEventListener("click", function (event) {
+                                    if (selectedShip != null) {
+                                        var didPlace = placeShip(boardPlayer, wrkX, wrkY, selShipOrient,
+                                            selectedShip.children.length);
+                                        if (didPlace == 0) {
+                                            var index = shipsToPlace.indexOf(selectedShip.children.length);
+                                            shipsToPlace.splice(index, 1);
+                                            selectedShip.style.display = "none";
+                                            canStart = checkStart();
+                                            var children = document.getElementById("shipDisplayContainer").children;
+                                            var goodChildren = [];
+                                            for (var i = 0; i < children.length; i++) {
+                                                if (children[i].style.display != "none") {
+                                                    goodChildren.push(children[i]);
+                                                }
+                                            }
+                                            if (goodChildren.length >= 1) {
+                                                selectShip(null);
+                                                //selectShip(goodChildren[0]);
+                                            } else {
+                                                selectShip(null);
+                                            }
+                                        }
+                                    } else {
+                                        if (DBG_menuVisible || menuSettingsVisible) {
+                                            DBG_menuVisible = false;
+                                            btnDBG.setAttribute("class", "menuButton");
+                                            menuSettingsVisible = false;
+                                            btnSettings.setAttribute("class", "menuButton");
+                                            drawToPlace();
+                                        }
+                                        var getX = (this.style.left.slice(0, -2) - 20) / 40 + 1;
+                                        var getY = (this.style.top.slice(0, -2) - 90) / 40 + 1;
+                                        if (boardPlayer[getX][getY] == 1) {
+                                            removeShip(getX, getY);
+                                        }
+                                    }
+                                });
+                            }
+                            cell.className = "boardElement";
+                            cell.style.left = 20 + 40 * (i - 1) + "px";
+                            cell.style.top = 90 + 40 * (j - 1) + "px";
+                            recolourBoard(board);
+                        } else {
+                            if (board == boardEnemy) {
+                                container.appendChild(cell);
+                                cell.className = "boardElement";
+                                cell.style.left = 20 + 40 * (i - 1) + "px";
+                                cell.style.top = 90 + 40 * (j - 1) + "px";
+                                recolourBoard(board);
+                                cell.addEventListener("click", function () {
+                                    if (playerTurn) {
+                                        var getX = (this.style.left.slice(0, -2) - 20) / 40 + 1;
+                                        var getY = (this.style.top.slice(0, -2) - 90) / 40 + 1;
+                                        if (boardEnemy[getX][getY] < 3) {
+                                            recolourBoard(boardEnemy);
+                                            boardEnemy[getX][getY] += 5;
+                                            if (boardEnemy[getX][getY] == 5 || boardEnemy[getX][getY] == 7)
+                                                playerTurn = false;
+                                            findShip(boardEnemy, getX, getY);
+                                            if (shipsFound.length > 0) {
+                                                var hits = 0;
+                                                for (var i = 0; i < shipsFound[0].length; i++) {
+                                                    if (shipsFound[0].orient == 0) {
+                                                        if (boardEnemy[shipsFound[0].x + i][shipsFound[0].y] ==
+                                                            6)
+                                                            hits++;
+                                                    } else {
+                                                        if (boardEnemy[shipsFound[0].x][shipsFound[0].y + i] ==
+                                                            6)
+                                                            hits++;
+                                                    }
+                                                }
+                                                if (hits == shipsFound[0].length) sinkShip(boardEnemy,
+                                                    shipsFound[0].x, shipsFound[0].y, shipsFound[0].orient,
+                                                    shipsFound[0].length);
+                                                recolourBoard(boardEnemy);
+                                            }
+                                            checkWin();
+                                        } else console.log("Aleady shot");
+                                        recolourBoard(boardEnemy);
+                                    } else {
+                                        if (turnAlert) window.confirm("Please wait for your turn");
+                                        console.log("Not your turn")
+                                    }
+                                });
+                            } else {
+                                container.appendChild(cell);
+                                cell.addEventListener("click", function (event) {
+                                    window.alert("Game started, can't interact with your own board anymore!");
+                                });
+                                cell.className = "boardElement";
+                                cell.style.left = 20 + 40 * (i - 1) + "px";
+                                cell.style.top = 90 + 40 * (j - 1) + "px";
+                                recolourBoard(board);
+                            }
+                        }
+                    }
+                }
+            }
+
+            function placeShip(board, coordX, coordY, orient, shipLength) { // Wstawia statek w wybrane miejsce na planszy 
+                var canPlace = checkShip(board, coordX, coordY, orient, shipLength);
+                if (canPlace) {
+                    if (orient == 0) {
+                        for (var x = coordX; x < coordX + shipLength; x++) {
+                            board[x][coordY] = 1;
+                        }
+                    } else {
+                        for (var y = coordY; y < coordY + shipLength; y++) {
+                            board[coordX][y] = 1;
+                        }
+                    }
+                } else {
+                    return 1;
+                }
+                drawBoard(board);
+                return 0;
+            }
+
+            function checkShip(board, coordX, coordY, orient, shipLength) { // Sprawdza, czy można wstawić statek w wybranym miejscu
+                var canPlace = true;
+                if (orient == 0) {
+                    for (var x = coordX - 1; x < coordX + shipLength + 1; x++) {
+                        for (var y = coordY - 1; y < coordY + 2; y++) {
+                            if (board[x][y] == 1) canPlace = false;
+                        }
+                    }
+                } else {
+                    for (var x = coordX - 1; x < coordX + 2; x++) {
+                        for (var y = coordY - 1; y < coordY + shipLength + 1; y++) {
+                            if (board[x][y] == 1) canPlace = false;
+                        }
+                    }
+                }
+                return canPlace;
+            }
+
+            function checkShot(board, coordX, coordY, orient, shipLength) {
+                var canPlace = true;
+                if (orient == 0) {
+                    var y = coordY;
+                    for (var x = coordX; x < coordX + shipLength - 1; x++) {
+                        if (board[x] == null || board[x][y] == null || board[x][y] > 4) {
+                            canPlace = false;
+                            break;
+                        }
+                    }
+                } else {
+                    var x = coordX;
+                    for (var y = coordY; y < coordY + shipLength - 1; y++) {
+                        if (board[x] == null || board[x][y] == null || board[x][y] > 4) {
+                            canPlace = false;
+                            break;
+                        }
+                    }
+                }
+                return canPlace;
+            }
+
+            function placeRandom(board) { // [MOD] Rozlokowuje losowo statki
+                buildBoard(board);
+                for (var k = 0; k < shipsToPlaceNoMod.length; k++) {
+                    DBG_placementFailures = -1;
+                    do {
+                        if (DBG_placementFailures == 100) {
+                            window.confirm("Nie udało się ustawić statków!\nResetowanie do domyślnych");
+                            customShipSet = [];
+                            DBG_placementFailures = -1;
+                            main();
+                        }
+                        var orientation = Math.round(Math.random());
+                        if (orientation == 0) {
+                            var placeX = getRandomInt(1, boardSize - shipsToPlaceNoMod[k] + 1);
+                            var placeY = getRandomInt(1, boardSize);
+                        } else {
+                            var placeX = getRandomInt(1, boardSize);
+                            var placeY = getRandomInt(1, boardSize - shipsToPlaceNoMod[k] + 1);
+                        }
+                        var status = placeShip(board, placeX, placeY, orientation, shipsToPlaceNoMod[k]);
+                        DBG_placementFailures++;
+                    } while (status != 0);
+                    if (board == boardPlayer) {
+                        shipsToPlace.shift();
+                        drawToPlace();
+                        canStart = checkStart();
+                    }
+                }
+            }
+
+            function simShip(board, coordX, coordY, orient, shipLength, target) { // Tworzy projekcje statku który stawiamy na planszy
+                var wrkCopy = target;
+                var child = wrkCopy;
+                var oTarget = target.parentElement.children;
+
+                if (orient == 0) {
+                    do {
+                        var redo = false;
+                        var i = 0;
+                        while ((child = child.previousSibling) != null)
+                            i++;
+                        if (oTarget[i + boardSize * (shipLength - 1) - 1] == null) {
+                            wrkCopy = oTarget[(boardSize * boardSize + coordY) - boardSize * shipLength - 1]
+                            oTarget = wrkCopy.parentElement.children;
+                            var coordX = (wrkCopy.style.left.slice(0, -2) - 20) / 40 + 1;
+                            var coordY = (wrkCopy.style.top.slice(0, -2) - 90) / 40 + 1;
+                            var child = wrkCopy;
+                            var i = 0;
+                            while ((child = child.previousSibling) != null)
+                                i++;
+                            redo = true;
+                        }
+                        wrkX = coordX;
+                        wrkY = coordY;
+                        var canPlace = checkShip(boardPlayer, wrkX, wrkY, selShipOrient, selectedShip.children.length);
+                    } while (false);
+
+                    for (var j = 0; j < shipLength; j++) {
+                        if (canPlace) {
+                            oTarget[i + boardSize * j - 1].style.backgroundColor = simColor;
+                        } else {
+                            oTarget[i + boardSize * j - 1].style.backgroundColor = lckColor;
+                        }
+                    }
+                } else {
+                    do {
+                        var redo = false;
+                        var i = 0;
+                        while ((child = child.previousSibling) != null)
+                            i++;
+                        if (oTarget[i + (shipLength - 1) - 1] == null || (oTarget[i + (shipLength - 1) - 1].style.left
+                            .slice(
+                                0, -2) - 20) / 40 + 1 != (wrkCopy.style.left.slice(0, -2) - 20) / 40 + 1) {
+                            wrkCopy = oTarget[coordX * boardSize - shipLength]
+                            oTarget = wrkCopy.parentElement.children;
+                            var coordX = (wrkCopy.style.left.slice(0, -2) - 20) / 40 + 1;
+                            var coordY = (wrkCopy.style.top.slice(0, -2) - 90) / 40 + 1;
+                            var child = wrkCopy;
+                            var i = 0;
+                            while ((child = child.previousSibling) != null)
+                                i++;
+                            redo = true;
+                        }
+                        wrkX = coordX;
+                        wrkY = coordY;
+                        var canPlace = checkShip(boardPlayer, wrkX, wrkY, selShipOrient, selectedShip.children.length);
+                    } while (false);
+
+                    for (var j = 0; j < shipLength; j++) {
+                        if (canPlace) {
+                            oTarget[i + j - 1].style.backgroundColor = simColor;
+                        } else {
+                            oTarget[i + j - 1].style.backgroundColor = lckColor;
+                        }
+                    }
+                }
+            }
+
+            function recolourBoard(board) { // Przywraca planszy kolory zgodne z tablicą opisującą ją
+                if (board == boardEnemy) {
+                    var container = document.getElementById("boardEnemy");
+                } else {
+                    var container = document.getElementById("boardPlayer");
+                }
+                for (var i = 0; i < container.children.length; i++) {
+                    var cell = container.children[i];
+                    var getX = (cell.style.left.slice(0, -2) - 20) / 40 + 1;
+                    var getY = (cell.style.top.slice(0, -2) - 90) / 40 + 1;
+                    if (board[getX][getY] == 1 && !(board == boardEnemy && !revealed)) {
+                        cell.style.backgroundColor = selColor;
+                    } else if (board[getX][getY] == 6) cell.style.backgroundColor = hitColor;
+                    else if (board[getX][getY] == 5 || board[getX][getY] == 7) cell.style.backgroundColor =
+                        misColor;
+                    else cell.style.backgroundColor = defColor;
+                }
+            }
+
+            function drawToPlace() { // Rysuje w panelu bocznym statki, które można rozstawić na planszy gracza 
+                var cont = document.getElementById("shipDisplayContainer");
+                cont.innerHTML = "";
+                cont.style.overflow = "hidden";
+                shipsToPlace.sort().reverse();
+                for (var i = 0; i < shipsToPlace.length; i++) {
+                    var span = document.createElement("SPAN");
+                    cont.appendChild(span);
+                    span.setAttribute("class", "shipDisplay");
+                    span.setAttribute("id", "ship" + i);
+                    for (var j = 0; j < shipsToPlace[i]; j++) {
+                        var cell = document.createElement("DIV");
+                        cell.style.backgroundColor = defColor;
+                        span.appendChild(cell);
+                        cell.addEventListener("click", function (event) {
+                            event.stopPropagation();
+                            var targ = event.target.parentElement;
+                            selectShip(targ);
+                        })
+                        cell.addEventListener("mouseover", function (event) {
+                            event.stopPropagation();
+                            highlightShip(event);
+                        })
+                        cell.addEventListener("mouseout", function (event) {
+                            event.stopPropagation();
+                            highlightShip(event);
+                        })
+                    }
+                }
+                if (shipsToPlace.length != 0) {
+                    selectShip(null);
+                }
+                if (menuSettingsVisible || DBG_menuVisible) {
+                    DBG_menuVisible = false;
+                    btnDBG.setAttribute("class", "menuButton");
+                }
+            }
+
+            function selectShip(target) { // Ustawia statek z panelu bocznego jako wybrany
+                var parent = target;
+                if (selectedShip != null) {
+                    if (selectedShip != parent) {
+                        for (var i = 0; i < selectedShip.children.length; i++) {
+                            selectedShip.children[i].style.backgroundColor = defColor;
+                        }
+                        selectedShip = parent;
+                        if (selectedShip != null) {
+                            for (var i = 0; i < selectedShip.children.length; i++) {
+                                selectedShip.children[i].style.backgroundColor = selColor;
+                            }
+                        }
+                    } else {
+                        for (var i = 0; i < selectedShip.children.length; i++) {
+                            selectedShip.children[i].style.backgroundColor = simColor;
+                        }
+                        selectedShip = null;
+                    }
+                } else {
+                    if (parent != null) {
+                        selectedShip = parent;
+                        for (var i = 0; i < selectedShip.children.length; i++) {
+                            selectedShip.children[i].style.backgroundColor = selColor;
+                        }
+                    } else {
+                        selectedShip = parent;
+                    }
+                }
+            }
+
+            function highlightShip(event) { // Podświetlenie statku w panelu bocznym po najechaniu
+                var parent = event.target.parentElement;
+                if (selectedShip != parent) {
+                    var shipLength = parent.children.length;
+                    var highlighted;
+                    if (event.target.style.backgroundColor == simColor) {
+                        highlighted = true;
+                    } else {
+                        highlighted = false;
+                    }
+                    if (highlighted) {
+                        for (var i = 0; i < shipLength; i++) {
+                            parent.children[i].style.backgroundColor = defColor;
+                        }
+                    } else {
+                        for (var i = 0; i < shipLength; i++) {
+                            parent.children[i].style.backgroundColor = simColor;
+                        }
+                    }
+                }
+            }
+
+            function switchShipOrient() { // Zmiana orientacji wybranego statku
+                if (selShipOrient == 0) {
+                    selShipOrient = 1;
+                } else {
+                    selShipOrient = 0;
+                }
+            }
+
+            function findShip(board, posX, posY) { // Znajduje i zwraca do tablicy lokalizację statku, którego częścią jest wskazany obiekt
+                shipsFound = [];
+                let length = 1;
+                let tmpX;
+                let tmpY;
+                let tmpTbl = [];
+                let orient;
+                if (board[posX][posY] == 1 || board[posX][posY] == 6) {
+                    for (var i = 0; i < 4; i++) {
+                        tmpX = posX;
+                        tmpY = posY;
+                        if (i == 0) {
+                            tmpTbl.push({
+                                x: tmpX,
+                                y: tmpY
+                            });
+                            tmpX++;
+                            while (board[tmpX][tmpY] == 1 || board[tmpX][tmpY] == 6) {
+                                length++;
+                                tmpTbl.push({
+                                    x: tmpX,
+                                    y: tmpY
+                                });
+                                tmpX++;
+                            }
+                        } else if (i == 1) {
+                            tmpX--;
+                            while (board[tmpX][tmpY] == 1 || board[tmpX][tmpY] == 6) {
+                                length++;
+                                tmpTbl.push({
+                                    x: tmpX,
+                                    y: tmpY
+                                });
+                                tmpX--;
+                            }
+                        } else if (i == 2) {
+                            tmpY++;
+                            while (board[tmpX][tmpY] == 1 || board[tmpX][tmpY] == 6) {
+                                length++;
+                                tmpTbl.push({
+                                    x: tmpX,
+                                    y: tmpY
+                                });
+                                tmpY++;
+                            }
+                        } else {
+                            tmpY--;
+                            while (board[tmpX][tmpY] == 1 || board[tmpX][tmpY] == 6) {
+                                length++;
+                                tmpTbl.push({
+                                    x: tmpX,
+                                    y: tmpY
+                                });
+                                tmpY--;
+                            }
+                        }
+                    }
+                    if (tmpTbl.length > 1) {
+                        if (tmpTbl[0].x != tmpTbl[1].x) {
+                            tmpTbl.sort(sortFunction);
+                            orient = 0;
+                        } else {
+                            tmpTbl.sort(sortFunctionAlt);
+                            orient = 1;
+                        }
+                    }
+                    var doPush = true;
+                    for (var i = 0; i < shipsFound.length; i++) {
+                        if (shipsFound[i].x == tmpTbl[0].x && shipsFound[i].y == tmpTbl[0].y) {
+                            doPush = false;
+                            break;
+                        }
+                    }
+                    if (doPush) {
+                        shipsFound.push({
+                            x: tmpTbl[0].x,
+                            y: tmpTbl[0].y,
+                            orient: orient,
+                            length: length
+                        });
+                    }
+                    return (shipsFound.length - 1);
+                } else {
+                    return false;
+                }
+            }
+
+            function removeShip(posX, posY) { // Usuwa z tablicy statek, którego częścią jest wskazany obiekt
+                var targ = findShip(boardPlayer, posX, posY);
+                for (var i = 0; i < shipsFound[targ].length; i++) {
+                    if (shipsFound[targ].orient == 0) {
+                        boardPlayer[shipsFound[targ].x + i][shipsFound[targ].y] = 0;
+                    } else {
+                        boardPlayer[shipsFound[targ].x][shipsFound[targ].y + i] = 0;
+                    }
+                }
+                shipsToPlace.push(shipsFound[targ].length);
+                canStart = checkStart();
+                recolourBoard(boardPlayer);
+                drawToPlace();
+            }
+
+            function checkStart() { // Sprawdza, warunki rozpoczęcia i włącza przycisk
+                if (!gameStarted) {
+                    if (shipsToPlace.length == 0) {
+                        btnStart.removeAttribute("disabled");
+                        btnStart.setAttribute("class", "menuButton");
+                        btnStart.style.animation = "lamButton 2s infinite linear";
+                        return true;
+                    } else {
+                        btnStart.setAttribute("disabled", true);
+                        btnStart.setAttribute("class", "menuButtonDisabled");
+                        btnStart.style.animation = "";
+                        return false;
+                    }
+                } else {
+                    console.error("--- Sprawdzenie startu, już po rozpoczęciu gry ---");
+                }
+            }
+
+            function startGame() { // Przygotowuję fazę gry
+                gameStarted = true;
+                setStatus(1);
+                drawBoard(boardEnemy);
+                drawBoard(boardPlayer);
+                for (var x = 1; x < boardSize + 1; x++) {
+                    for (var y = 1; y < boardSize + 1; y++) {
+                        findShip(boardPlayer, x, y);
+                    }
+                }
+                btnStart.setAttribute("disabled", true);
+                btnStart.setAttribute("class", "menuButtonDisabled");
+                btnStart.style.animation = "";
+                btnSettings.setAttribute("disabled", true);
+                btnSettings.setAttribute("class", "menuButtonDisabled");
+                DBG_menuVisible = false;
+                btnDBG.setAttribute("class", "menuButton");
+                drawToPlace();
+            }
+
+            function checkWin() { // [MOD] Sprawdza warunek zwycięstwa gracza
+                var aliveEnemy = 0;
+                for (var x = 1; x < boardSize + 2; x++) {
+                    for (var y = 1; y < boardSize + 2; y++) {
+                        if (boardEnemy[x][y] == 1) {
+                            aliveEnemy++;
+                        }
+                    }
+                }
+                if (aliveEnemy != 0) {
+                    let pass = false;
+                    if (!msEnabled) pass = true;
+                    if (!playerTurn || pass) setTimeout(enemyShoot, enemyThinkTime);
+                } else {
+                    revealed = true;
+                    setTimeout(function () {
+                        var reload = window.confirm("\t\t-- Victory! --\nPress 'ok' to restart the game");
+                        if (reload) {
+                            reloadPage();
+                        } else {
+                            btnReload.style.animation = "lamButton 2s infinite linear";
+                            setStatus(2);
+                            gameStarted = false;
+                            btnDBG.style.display = "none";
+                            drawBoard(boardEnemy);
+                            recolourBoard(boardEnemy);
+                        }
+                    }, 250);
+                }
+            }
+
+            function enemyShoot() { // [MOD] Wykonuje akcję strzału bota
+                let x;
+                let y;
+                if (botToShoot.length != 0) {
+                    x = botToShoot[0].x;
+                    y = botToShoot[0].y;
+                    botToShoot.shift();
+                } else {
+                    var savedIndex = [0];
+                    for (var index = 0; index < possibleTargets.length; index++) {
+                        if (possibleTargets[index].heat >= possibleTargets[savedIndex[0]].heat) {
+                            if (possibleTargets[index].heat == possibleTargets[savedIndex[0]].heat) {
+                                savedIndex.push(index);
+                            } else {
+                                savedIndex = [];
+                                savedIndex.push(index);
+                            }
+                        }
+                    }
+                    var temp = getRandomInt(0, savedIndex.length - 1);
+                    //console.log(temp);
+                    var tmp2 = savedIndex[temp];
+                    //console.log(tmp2);
+                    var pass = false;
+                    x = possibleTargets[tmp2].x;
+                    y = possibleTargets[tmp2].y;
+                    if (boardPlayer[x][y] == 1) {
+                        var humanise = [0, 1];
+                        for (var i = 0; i < 4; i++) {
+                            let index = getRandomInt(0, humanise.length - 1);
+                            let tmpX = x;
+                            let tmpY = y;
+                            let doX = true;
+                            let doY = true;
+                            if (humanise[index] == 0) {
+                                tmpX++;
+                                do {
+                                    botToShoot.push({
+                                        x: tmpX,
+                                        y: tmpY
+                                    });
+                                    tmpX++;
+                                } while (boardPlayer[tmpX - 1][tmpY] == 1);
+                                tmpX = x;
+                                tmpX--;
+                                do {
+                                    botToShoot.push({
+                                        x: tmpX,
+                                        y: tmpY
+                                    });
+                                    tmpX--;
+                                } while (boardPlayer[tmpX + 1][tmpY] == 1);
+                            } else {
+                                tmpY++;
+                                do {
+                                    botToShoot.push({
+                                        x: tmpX,
+                                        y: tmpY
+                                    });
+                                    tmpY++;
+                                } while (boardPlayer[tmpX][tmpY - 1] == 1);
+                                tmpY = y;
+                                tmpY--;
+                                do {
+                                    botToShoot.push({
+                                        x: tmpX,
+                                        y: tmpY
+                                    });
+                                    tmpY--;
+                                } while (boardPlayer[tmpX][tmpY + 1] == 1);
+                            }
+                            humanise.splice(index, 1);
+                        }
+                    }
+                }
+                if (boardPlayer[x][y] >= 5 || boardPlayer[x][y] == 2) {
+                    enemyShoot();
+                    return null;
+                } else {
+                    boardPlayer[x][y] += 5;
+                    if (msEnabled) {
+                        if (boardPlayer[x][y] == 5 || boardPlayer[x][y] == 7) playerTurn = true;
+                    } else playerTurn = true;
+
+                    findShip(boardPlayer, x, y);
+                    if (shipsFound.length > 0) {
+                        var hits = 0;
+                        for (var i = 0; i < shipsFound[0].length; i++) {
+                            if (shipsFound[0].orient == 0) {
+                                if (boardPlayer[shipsFound[0].x + i][shipsFound[0].y] == 6) hits++;
+                            } else {
+                                if (boardPlayer[shipsFound[0].x][shipsFound[0].y + i] == 6) hits++;
+                            }
+                        }
+                        if (hits == shipsFound[0].length) {
+                            sinkShip(boardPlayer, shipsFound[0].x, shipsFound[0]
+                                .y, shipsFound[0].orient, shipsFound[0].length);
+                            shipsDestroyed.push(shipsFound[0].length);
+                        }
+                    }
+                    updateToDestroy();
+                    setPossibleTargets();
+                    recolourBoard(boardPlayer);
+                    checkLoss();
+                }
+            }
+
+            function checkLoss() { // [MOD] Sprawdza warunek zwycięstwa bota
+                var alivePlayer = 0;
+                for (var x = 1; x < boardSize + 2; x++) {
+                    for (var y = 1; y < boardSize + 2; y++) {
+                        if (boardPlayer[x][y] == 1) {
+                            alivePlayer++;
+                        }
+                    }
+                }
+                recolourBoard(boardPlayer);
+                if (alivePlayer == 0) {
+                    revealed = true;
+                    setTimeout(function () {
+                        var reload = window.confirm("\t\t-- Defeat! --\nPress 'ok' to restart the game");
+                        if (reload)
+                            reloadPage();
+                        else {
+                            btnReload.style.animation = "lamButton 2s infinite linear";
+                            setStatus(2);
+                            gameStarted = false;
+                            btnDBG.style.display = "none";
+                            drawBoard(boardEnemy);
+                            recolourBoard(boardEnemy);
+                        }
+                    }, 250);
+                } else {
+                    if (msEnabled && !playerTurn) setTimeout(enemyShoot, enemyThinkTime);
+                }
+            }
+
+            function sinkShip(board, posX, posY, orient, len) { // Tworzy ramkę na około zatopionego statku
+                if (orient == 0) {
+                    for (var xOff = -1; xOff < len + 1; xOff++) {
+                        for (var yOff = -1; yOff < 2; yOff++) {
+                            if (board[posX + xOff][posY + yOff] == 0) {
+                                if (asEnabled) board[posX + xOff][posY + yOff] = 5;
+                                else board[posX + xOff][posY + yOff] = 2;
+                            }
+                        }
+                    }
+                } else {
+                    for (var xOff = -1; xOff < 2; xOff++) {
+                        for (var yOff = -1; yOff < len + 1; yOff++) {
+                            if (board[posX + xOff][posY + yOff] == 0) {
+                                if (asEnabled) board[posX + xOff][posY + yOff] = 5;
+                                else board[posX + xOff][posY + yOff] = 2;
+                            }
+                        }
+                    }
+                }
+            }
+
+            function setStatus(status) {
+                if (status == 0) {
+                    statusBox.setAttribute("class", "statusIcon status_placement");
+                    statusBox.innerHTML = "PLACEMENT";
+                } else if (status == 1) {
+                    statusBox.setAttribute("class", "statusIcon status_game");
+                    statusBox.innerHTML = "GAME";
+                } else if (status == 2) {
+                    statusBox.setAttribute("class", "statusIcon status_post");
+                    statusBox.innerHTML = "POST-GAME";
+                } else {
+                    console.error("Niepoprawny status!")
+                }
+            }
+
+            function showSettings() {
+                if (!menuSettingsVisible) {
+                    menuSettingsVisible = true;
+                    btnSettings.setAttribute("class", "menuButton menuButtonActive");
+                    DBG_menuVisible = false;
+                    btnDBG.setAttribute("class", "menuButton");
+                    var cont = document.getElementById("shipDisplayContainer");
+                    cont.innerHTML = "<div style=\"margin-top: 10px;\">Settings:</div>";
+                    var div = document.createElement("DIV");
+                    cont.appendChild(div);
+                    div.style.fontSize = "24px";
+                    div.style.textAlign = "left";
+                    div.style.paddingLeft = "10px";
+
+                    // Przycisk 1
+                    var chk = document.createElement("INPUT");
+                    div.appendChild(chk);
+                    chk.setAttribute("type", "checkbox");
+                    if (msEnabled) chk.setAttribute("checked", true);
+                    chk.addEventListener("click", msSwitch);
+                    var temp = document.createElement("DIV");
+                    temp.innerHTML = "multi-shot";
+                    temp.setAttribute("style", "display: inline; margin-left: 5px");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+
+                    // Przycisk 2
+                    var chk = document.createElement("INPUT");
+                    div.appendChild(chk);
+                    chk.setAttribute("type", "checkbox");
+                    if (asEnabled) chk.setAttribute("checked", true);
+                    chk.addEventListener("click", asSwitch);
+                    chk.setAttribute("disabled", true);
+                    var temp = document.createElement("DIV");
+                    temp.innerHTML = "auto-sink";
+                    temp.setAttribute("style", "display: inline; margin-left: 5px; color: gray");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+
+                    // Przycisk 3
+                    var chk = document.createElement("INPUT");
+                    div.appendChild(chk);
+                    chk.setAttribute("type", "checkbox");
+                    if (enemyThinkTime != 1000) chk.setAttribute("checked", true);
+                    chk.addEventListener("click", setEnemyThinkTime);
+                    var temp = document.createElement("DIV");
+                    temp.innerHTML = "custom think time";
+                    temp.setAttribute("style", "display: inline; margin-left: 5px");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+
+                    // Przycisk 4
+                    var chk = document.createElement("INPUT");
+                    div.appendChild(chk);
+                    chk.setAttribute("type", "checkbox");
+                    if (turnAlert) chk.setAttribute("checked", true);
+                    chk.addEventListener("click", turnAlertSwitch);
+                    var temp = document.createElement("DIV");
+                    temp.innerHTML = "turn alert";
+                    temp.setAttribute("style", "display: inline; margin-left: 5px");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+
+                    // Przycisk 5
+                    var chk = document.createElement("INPUT");
+                    div.appendChild(chk);
+                    chk.setAttribute("type", "checkbox");
+                    if (doReload) chk.setAttribute("checked", true);
+                    chk.addEventListener("click", reloadSwitch);
+                    var temp = document.createElement("DIV");
+                    temp.innerHTML = "reload page on restart";
+                    temp.setAttribute("style", "display: inline; margin-left: 5px");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+                    var temp = document.createElement("BR");
+                    div.appendChild(temp);
+                } else {
+                    menuSettingsVisible = false;
+                    btnSettings.setAttribute("class", "menuButton");
+                    drawToPlace();
+                }
+            }
+
+            function msSwitch() {
+                if (msEnabled) msEnabled = false;
+                else msEnabled = true;
+            }
+
+            function asSwitch() {
+                if (asEnabled) asEnabled = false;
+                else asEnabled = true;
+            }
+
+            function setEnemyThinkTime() {
+                var tmp;
+                do {
+                    tmp = parseInt(window.prompt("Input new enemy thinking time (default: 1000, previous: " +
+                        enemyThinkTime + ")"));
+                    if (isNaN(tmp)) tmp = 1000;
+                } while (parseInt(tmp) < 0);
+                enemyThinkTime = tmp;
+                showSettings();
+                showSettings();
+            }
+
+            function turnAlertSwitch() {
+                if (turnAlert) turnAlert = false;
+                else turnAlert = true;
+            }
+
+            function reloadSwitch() {
+                if (doReload) doReload = false;
+                else doReload = true;
+            }
+
+            function reloadPage() {
+                if (doReload) location.reload();
+                else main();
+            }
+
+            function setupButtons() {
+                btnContainer.innerHTML = "";
+
+                // Przycisk #1
+                var btn = document.createElement("BUTTON");
+                btnContainer.appendChild(btn);
+                btn.addEventListener("click", startGame);
+                btn.setAttribute("id", "btnStartGame");
+                btn.setAttribute("class", "menuButton");
+                btn.setAttribute("disabled", true);
+                btn.innerHTML = "Start";
+
+                // Przycisk #2
+                var btn = document.createElement("BUTTON");
+                btnContainer.appendChild(btn);
+                btn.addEventListener("click", reloadPage);
+                btn.setAttribute("id", "btnReload");
+                btn.setAttribute("class", "menuButton");
+                btn.innerHTML = "Restart";
+
+                // Przycisk #3
+                var btn = document.createElement("BUTTON");
+                btnContainer.appendChild(btn);
+                btn.addEventListener("click", DBG_showMenu);
+                btn.setAttribute("id", "btnDBGshowMenu");
+                btn.setAttribute("class", "menuButton");
+                btn.setAttribute("style", "display: none");
+                btn.innerHTML = "Debug";
+
+                // Przycisk #4
+                var btn = document.createElement("BUTTON");
+                btnContainer.appendChild(btn);
+                btn.addEventListener("click", showSettings);
+                btn.setAttribute("id", "btnSettings");
+                btn.setAttribute("class", "menuButton");
+                btn.innerHTML = "Settings";
+
+                // Status Box
+                var btn = document.createElement("DIV");
+                btnContainer.appendChild(btn);
+                btn.addEventListener("click", DBG_enable);
+                btn.setAttribute("id", "statusBox");
+                btn.setAttribute("class", "statusIcon");
+                btn.innerHTML = "RIP Scripts";
+            }
+
+            function updateToDestroy() {
+                shipsDestroyed = shipsDestroyed.sort().reverse();
+                for (var i = 0; i < shipsDestroyed.length; i++) {
+                    for (var j = 0; j < shipsToDestroy.length; j++) {
+                        if (shipsDestroyed[i] == shipsToDestroy[j]) {
+                            shipsToDestroy.splice(j, 1);
+                            break;
+                        }
+                    }
+                }
+                shipsDestroyed = [];
+            }
+
+            function setPossibleTargets() { // Tworzy tablicę przechowującą dane planszy (do czyszczenia)
+                possibleTargets = [];
+                for (var i = 1; i < boardSize + 1; i++) {
+                    for (var j = 1; j < boardSize + 1; j++) {
+                        if (boardPlayer[i][j] == 0 || boardPlayer[i][j] == 1) possibleTargets.push({x: i, y: j, heat: 0});
+                    }
+                }
+                setHeat();
+            }
+
+            function setHeat() {
+                for (var i = 0; i < possibleTargets.length; i++) {
+                    addHeat(i, 0);
+                    addHeat(i, 1);
+                    //if (possibleTargets[i] != 0) possibleTargets[i].heat++;
+                }
+                showHeat();
+            }
+
+            function addHeat(index, orient) { // [MOD] Zła wielkość statku? Zawsze sprawdza dla -1
+                var canPlace = true;
+                if (orient == 0) {
+                    var y = possibleTargets[index].y;
+                    for (var x = possibleTargets[index].x; x < possibleTargets[index].x + shipsToDestroy[0]; x++) {
+                        if (boardPlayer[x] == null || boardPlayer[x][y] == null || boardPlayer[x][y] > 4) {
+                            canPlace = false;
+                            break;
+                        }
+                    }
+                    if (canPlace) {
+                        for (var x = possibleTargets[index].x; x < possibleTargets[index].x + shipsToDestroy[0]; x++) {
+                            for (var i = 0; i < possibleTargets.length; i++) {
+                                if (possibleTargets[i].x == x && possibleTargets[i].y == y) {
+                                    possibleTargets[i].heat++;
+                                    //console.log("--- X: " + possibleTargets[index].x + " Y: "+ possibleTargets[index].y
+                                    //+ "\nadding to X: " + possibleTargets[i].x + " Y: "+ possibleTargets[i].y
+                                    //+ "\nSum is: " + possibleTargets[i].heat);
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    var x = possibleTargets[index].x;
+                    for (var y = possibleTargets[index].y; y < possibleTargets[index].y + shipsToDestroy[0]; y++) {
+                        if (boardPlayer[x] == null || boardPlayer[x][y] == null || boardPlayer[x][y] > 4) {
+                            canPlace = false;
+                            break;
+                        }
+                    }
+                    if (canPlace) {
+                        for (var y = possibleTargets[index].y; y < possibleTargets[index].y + shipsToDestroy[0]; y++) {
+                            for (var i = 0; i < possibleTargets.length; i++) {
+                                if (possibleTargets[i].x == x && possibleTargets[i].y == y) {
+                                    possibleTargets[i].heat++;
+                                    //console.log("--- X: " + possibleTargets[index].x + " Y: "+ possibleTargets[index].y
+                                    //+ "\nadding to X: " + possibleTargets[i].x + " Y: "+ possibleTargets[i].y
+                                    //+ "\nSum is: " + possibleTargets[i].heat);
+                                }
+                            }
+                        }
+                    }
+                }
+                return canPlace;
+            }
+
+            function showHeat() {
+                var tempBoard = [];
+                buildBoard(tempBoard);
+                for (var i = 0; i < possibleTargets.length; i++) {
+                    tempBoard[possibleTargets[i].x][possibleTargets[i].y] = possibleTargets[i].heat;
+                }
+                //console.table(tempBoard);
+                //console.log(shipsToDestroy[0]);
+            }
+
+            // ---------------------------------------------------
+            // Funkcje poniżej są funkcjami trybu developerskiego!
+            // ---------------------------------------------------
+
+            function DBG_enable() { // Odpowiada za uruchomienie trybu developerskiego
+                if (btnDBG.style.display == "none") {
+                    clearTimeout(DBG_timeout);
+                    DBG_timeout = null;
+                    DBG_clickCount++;
+                    DBG_timeout = setTimeout(function () {
+                        DBG_clickCount = 0
+                    }, 250);
+                    if (DBG_clickCount == 4) {
+                        let DBG_pass = window.prompt("Podaj hasło trybu developerskiego");
+                        if (DBG_pass == "plaintextLMAO") {
+                            btnDBG.style.display = "inline-block";
+                            //console.warn("---DBG--- Uruchomiono tryb developerski ---DBG---");
+                        }
+                    }
+                } else {
+                    btnDBG.style.display = "none";
+                    revealed = false;
+                }
+            }
+
+            function DBG_revealSwitch() { // Developerski przełącznik widoczności statków wroga
+                //console.warn("---DBG--- DBG_revealSwitch została użyta ---DBG---")
+                if (revealed) revealed = false;
+                else revealed = true;
+                drawBoard(boardEnemy);
+            }
+
+            function DBG_showMenu() { // Menu debugu
+                if (!DBG_menuVisible) {
+                    DBG_menuVisible = true;
+                    btnDBG.setAttribute("class", "menuButton menuButtonActive");
+                    if (!gameStarted) {
+                        menuSettingsVisible = false;
+                        btnSettings.setAttribute("class", "menuButton");
+                    } else {
+                        menuSettingsVisible = false;
+                        btnSettings.setAttribute("class", "menuButtonDisabled");
+                    }
+                    var cont = document.getElementById("shipDisplayContainer");
+                    cont.innerHTML = "<div style=\"margin-top: 10px;\">Debug:</div>";
+
+                    // Przycisk #1
+                    var btn = document.createElement("BUTTON");
+                    cont.appendChild(btn);
+                    btn.addEventListener("click", DBG_revealSwitch);
+                    btn.setAttribute("id", "btnDBGReveal");
+                    btn.setAttribute("class", "debugButton");
+                    btn.innerHTML = "Reveal Enemy";
+
+                    // Przycisk #2
+                    var btn = document.createElement("BUTTON");
+                    cont.appendChild(btn);
+                    btn.addEventListener("click", function () { etStatus(0) });
+                    btn.setAttribute("class", "debugButton");
+                    btn.innerHTML = "Status = 0";
+
+                    // Przycisk #3
+                    var btn = document.createElement("BUTTON");
+                    cont.appendChild(btn);
+                    btn.addEventListener("click", function () { setStatus(1) });
+                    btn.setAttribute("class", "debugButton");
+                    btn.innerHTML = "Status = 1";
+
+                    // Przycisk #4
+                    var btn = document.createElement("BUTTON");
+                    cont.appendChild(btn);
+                    btn.addEventListener("click", function () { setStatus(2) });
+                    btn.setAttribute("class", "debugButton");
+                    btn.innerHTML = "Status = 2";
+
+                    // Przycisk #5
+                    var btn = document.createElement("BUTTON");
+                    cont.appendChild(btn);
+                    btn.addEventListener("click", function () { shipsToPlace = []; startGame() });
+                    btn.setAttribute("class", "debugButton");
+                    btn.innerHTML = "Force Start";
+
+                    // Przycisk #6
+                    var btn = document.createElement("BUTTON");
+                    cont.appendChild(btn);
+                    btn.addEventListener("click", DBG_setCustomShips);
+                    btn.setAttribute("class", "debugButton");
+                    btn.innerHTML = "Custom Shipset";
+
+                    // Przycisk #7
+                    var btn = document.createElement("BUTTON");
+                    cont.appendChild(btn);
+                    btn.addEventListener("click", function () { placeRandom(boardPlayer) });
+                    btn.setAttribute("class", "debugButton");
+                    btn.innerHTML = "Place Random";
+
+                    // Przycisk #8
+                    var btn = document.createElement("BUTTON");
+                    cont.appendChild(btn);
+                    btn.addEventListener("click", showSettings);
+                    btn.setAttribute("class", "debugButton");
+                    btn.innerHTML = "Show Settings";
+                } else {
+                    DBG_menuVisible = false;
+                    btnDBG.setAttribute("class", "menuButton");
+                    drawToPlace();
+                }
+            }
+
+            function DBG_setCustomShips() {
+                do {
+                    var redo = false;
+                    let temp = window.prompt("Jakie statki?");
+                    customShipSet = eval("[" + temp + "]");
+                    for (var i = 0; i < customShipSet.length; i++) {
+                        if (customShipSet[i] > boardSize || customShipSet[i] < 1) redo = true;
+                    }
+                    if (!temp) {
+                        customShipSet = [];
+                        redo = false;
+                    }
+                } while (redo);
+                btnDBG.setAttribute("class", "menuButton");
+                main();
+            }
+            
+            }
+    </script>
+
+    <style>
+        * {
+            font-family: Cambria, Cochin, Georgia, Times, 'Times New Roman', serif;
+            margin: 0;
+            padding: 0;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -khtml-user-select: none;
+            -moz-user-select: none;
+            -ms-user-select: none;
+            user-select: none;
+        }
+
+        body {
+            width: 100vw;
+            overflow: hidden;
+            background-color: #202020;
+        }
+
+        #masterContainer {
+            width: 1188px;
+            margin: 0 auto;
+        }
+
+        #buttonContainer {
+            position: relative;
+            clear: both;
+            width: 1124px;
+            margin: 10px 0 0 20px;
+            background-color: rgb(127, 255, 212);
+            padding: 0 20px 20px 0;
+            border: 10px solid rgb(27, 155, 112);
+            border-radius: 20px;
+        }
+
+        .menuButton {
+            margin: 20px 0 0 20px;
+            height: 50px;
+            box-sizing: border-box;
+            min-width: 130px;
+            font-size: 2em;
+            padding: 0 10px;
+            border: 4px outset;
+            background-color: rgb(64, 64, 64);
+            color: rgb(224, 224, 224);
+        }
+
+        .menuButtonDisabled {
+            margin: 20px 0 0 20px;
+            height: 50px;
+            min-width: 130px;
+            font-size: 2em;
+            padding: 0 10px;
+            border: 4px outset;
+            background-color: rgb(96, 96, 96);
+            color: rgb(64, 64, 64);
+        }
+
+        .menuButton:hover {
+            color: rgb(224, 128, 64);
+            cursor: pointer;
+        }
+
+        .menuButton:active {
+            color: rgb(224, 128, 64);
+            border-style: inset;
+        }
+
+        .menuButtonActive {
+            color: rgb(160, 160, 160);
+            border-style: inset
+        }
+
+        .debugButton {
+            margin: 5px auto;
+            display: block;
+            height: 40px;
+            min-width: 140px;
+            max-width: 140px;
+            font-size: 18px;
+            padding: 5px;
+            border: 4px outset;
+            text-align: center;
+            background-color: rgb(64, 64, 64);
+            color: rgb(224, 224, 224);
+        }
+
+        .debugButton:hover {
+            color: rgb(224, 128, 64);
+            cursor: pointer;
+        }
+
+        .debugButton:active {
+            color: rgb(192, 96, 32);
+            border-style: inset;
+        }
+
+        #shipDisplayContainer {
+            height: 510px;
+            width: 184px;
+            float: left;
+            background-color: rgb(255, 228, 196);
+            margin: 20px 0 0 20px;
+            border: 10px solid rgb(155, 128, 96);
+            border-radius: 20px;
+            text-align: center;
+            font-size: 2em;
+        }
+
+        .shipDisplay {
+            display: block;
+            margin: 10px;
+            clear: both;
+            height: 40px;
+        }
+
+        .shipDisplay div {
+            float: left;
+            width: 40px;
+            height: 40px;
+            border: 1px solid black;
+            background-color: red;
+            box-sizing: border-box;
+        }
+
+        .boardContainer {
+            position: relative;
+            width: 384px;
+            padding: 28px;
+            height: 454px;
+            background-color: rgb(135, 206, 235);
+            float: left;
+            border: 10px solid rgb(35, 106, 135);
+            border-radius: 20px;
+            margin: 20px 0 0 20px;
+            font-size: 2em;
+            color: black;
+            text-align: center;
+        }
+
+        .boardElement {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            left: 0;
+            top: 0;
+            border: 1px solid black;
+            background-color: red;
+            box-sizing: border-box;
+        }
+
+        .statusIcon {
+            position: absolute;
+            width: 240px;
+            height: 40px;
+            line-height: 40px;
+            font-size: 2em;
+            text-align: center;
+            top: 19px;
+            right: 19px;
+            background-color: lightgray;
+            border: 7px solid gray;
+        }
+
+        .status_placement {
+            color: black;
+            background-color: lightblue;
+            border: 7px solid blue;
+        }
+
+        .status_game {
+            color: White;
+            background-color: lightcoral;
+            border: 7px solid red;
+        }
+
+        .status_post {
+            color: white;
+            background-color: olivedrab;
+            border: 7px solid darkgreen;
+        }
+
+        @keyframes lamButton {
+            0% {
+                box-shadow: 0px 0px 80px #FF0000, 0px 0px 200px white;
+                border: 6px solid #FF0000;
+            }
+
+            11% {
+                box-shadow: 0px 0px 80px #FF0000, 0px 0px 200px white;
+                border: 2px solid #FF0000;
+            }
+
+            22% {
+                box-shadow: 0px 0px 40px #FF0000, 0px 0px 200px white;
+                border: 6px solid #FF0000;
+            }
+
+            33% {
+                box-shadow: 0px 0px 80px #00FF00, 0px 0px 200px white;
+                border: 6px solid #00FF00;
+            }
+
+            44% {
+                box-shadow: 0px 0px 80px #00FF00, 0px 0px 200px white;
+                border: 2px solid #00FF00;;
+            }
+
+            55% {
+                box-shadow: 0px 0px 40px #00FF00, 0px 0px 200px white;
+                border: 6px solid #00FF00;
+            }
+
+            66% {
+                box-shadow: 0px 0px 80px #0000FF, 0px 0px 200px white;
+                border: 6px solid #0000FF;
+            }
+
+            77% {
+                box-shadow: 0px 0px 80px #0000FF, 0px 0px 200px white;
+                border: 2px solid #0000FF;
+            }
+
+            88% {
+                box-shadow: 0px 0px 40px #0000FF, 0px 0px 200px white;
+                border: 6px solid #0000FF;
+            }
+
+            100% {
+                box-shadow: 0px 0px 80px #FF0000, 0px 0px 200px white;
+                border: 6px solid #FF0000
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div id="masterContainer">
+        <div id="buttonContainer">
+            <button class="menuButtonDisabled" disabled>Start</button>
+            <button class="menuButtonDisabled" disabled>Restart</button>
+            <button class="menuButtonDisabled" disabled>Settings</button>
+            <div class="statusIcon">RIP SCRIPTS</div>
+        </div>
+
+        <div id="shipDisplayContainer">Script did not initiate properly, perhaps it is blocked? Please disable any script
+            blocking extensions and refresh the page</div>
+
+        <div id="boardPlayer" class="boardContainer">Script did not initiate properly, perhaps it is blocked? Please
+            disable any javascript blocking extensions and refresh the page</div>
+        <div id="boardEnemy" class="boardContainer">Script did not initiate properly, perhaps it is blocked? Please disable
+            any javascript blocking extensions and refresh the page</div>>
+    </div>
+</body>
+
+</html>
